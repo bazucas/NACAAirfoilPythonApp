@@ -102,12 +102,8 @@ if st.button("Calculate"):
         input_file.write("\n\n")
         input_file.write("quit\n")
 
-    # Local onde o xfoil.exe estará montado dentro do contêiner Docker
-    xfoil_path = "/app/xfoil/xfoil.exe"
-
     # Substitua a chamada para subprocess para utilizar o caminho do xfoil.exe
-    subprocess.call(f"{xfoil_path} < input_file.in", shell=True)
-
+    xfoil_path = "C:/app/xfoil/xfoil.exe"
     # Initialize variables to store the extracted values
     CL = CD = CDp = CM = None
 

@@ -8,3 +8,4 @@ services:
       - ./xfoil:/app/xfoil
     environment:
       - PYTHONUNBUFFERED=1
+    platform: windows
