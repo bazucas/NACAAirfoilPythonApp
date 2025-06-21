@@ -1,5 +1,5 @@
-LOAD airfoil.dat
 
+LOAD airfoil.dat
 
 PANE
 OPER
@@ -9,7 +9,6 @@ PACC
 polar_file.txt
 
 ITER 100
-Alfa 1.0 
-
+Alfa 1.0
 
 quit
