@@ -141,7 +141,7 @@ def run_xfoil(inp_path: Path) -> tuple[str, str]:
     return result.stdout, result.stderr
 
 
-def export_stl(x, y_up, y_lo, span, fname):
+def export_stl(x, y_up, y_lo, span, fname, stl_chord):
     """
     Extrude current section by *span* and write an STL file.
 
@@ -151,6 +151,7 @@ def export_stl(x, y_up, y_lo, span, fname):
     - y_lo: array of y coordinates of the lower surface
     - span: span of the airfoil to extrude (along the Z axis)
     - fname: path to the output STL file
+    - stl_chord: chord length to be used for the STL (can be different from the plot chord)
     """
     # Vertices of the surfaces (z=0 and z=span)
     z0 = np.zeros_like(x)  # At z=0 (base of the extruded airfoil)
@@ -200,6 +201,7 @@ def export_stl(x, y_up, y_lo, span, fname):
             f.write("endsolid airfoil\n")
 
     return fname
+
 
 
 def parse_polar(polar_path: Path) -> dict[str, float]:
@@ -342,6 +344,7 @@ reynolds = st.sidebar.slider("Reynolds Number", 100_000, 3_000_000, 500_000, 50_
 mach = st.sidebar.slider("Mach Number", 0.05, 0.85, 0.5, 0.01)
 alpha = st.sidebar.slider("Angle of Attack [°]", -10.0, 15.0, 1.0, 0.1)
 span = st.sidebar.number_input("Span for STL [m]", 0.05, 10.0, 0.30, 0.05)
+stl_chord = st.sidebar.number_input("STL chord [m]", 0.1, 10.0, chord, 0.1)
 
 # ---------------------------------------------------------------------------
 # --- Airfoil generation & plot ---------------------------------------------
@@ -375,7 +378,7 @@ with airfoil_dat.open("rb") as dat_file:
     )
 if st.button("Export STL"):
     stl_path = coord_filename("airfoil.stl")
-    export_stl(x, y_up, y_lo, span, stl_path)
+    export_stl(x, y_up, y_lo, span, stl_path, stl_chord)
     with stl_path.open("rb") as f:
         st.download_button("⬇️ Download airfoil.stl", f, "airfoil.stl", "application/sla")
     st.success("STL gerado com sucesso!")
