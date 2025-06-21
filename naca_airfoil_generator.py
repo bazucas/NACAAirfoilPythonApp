@@ -153,6 +153,55 @@ def parse_polar(polar_path: Path) -> dict[str, float]:
     raise ValueError("Polar data not found in polar_file.txt")
 
 
+# ---- Perfis NACA predefinidos (todos 4 dígitos) ----
+NACA_LIST = [
+    "Custom",
+    # Série 00xx (simétricos)
+    "0001", "0006", "0009", "0010", "0012", "0015", "0018", "0021", "0025",
+    # 22xx a 27xx
+    "2206", "2209", "2212", "2215", "2218", "2221",
+    "2306", "2309", "2312", "2315", "2318", "2321",
+    "2406", "2409", "2412", "2415", "2418", "2421",
+    "2506", "2509", "2512", "2515", "2518", "2521",
+    "2606", "2609", "2612", "2615", "2618", "2621",
+    "2706", "2709", "2712", "2715", "2718", "2721",
+    # 42xx a 47xx
+    "4206", "4209", "4212", "4215", "4218", "4221",
+    "4306", "4309", "4312", "4315", "4318", "4321",
+    "4406", "4409", "4412", "4415", "4418", "4421",
+    "4506", "4509", "4512", "4515", "4518", "4521",
+    "4606", "4609", "4612", "4615", "4618", "4621",
+    "4706", "4709", "4712", "4715", "4718", "4721",
+    # Séries 62xx-67xx
+    "6206", "6209", "6212", "6215", "6218", "6221",
+    "6306", "6309", "6312", "6315", "6318", "6321",
+    "6406", "6409", "6412", "6415", "6418", "6421",
+    "6506", "6509", "6512", "6515", "6518", "6521",
+    "6606", "6609", "6612", "6615", "6618", "6621",
+    "6706", "6709", "6712", "6715", "6718", "6721",
+]
+
+from typing import Tuple
+
+def decode_naca(code: str) -> Tuple[float, float, float]:
+    """
+    Converte um código NACA de 4 dígitos em (t_c, m_c, p_c).
+
+    Ex.: "4412" → (0.12, 0.04, 0.4)
+    Regra (série 4):
+      1.º dígito  → m/c (camber)   = x * 0.01
+      2.º dígito  → p/c (posição)  = y * 0.10
+      3-4.º dígitos → t/c (espess.) = zz * 0.01
+    """
+    code = code.strip()
+    if len(code) != 4 or not code.isdigit():
+        raise ValueError("Só perfis NACA de 4 dígitos são suportados.")
+    m_c = int(code[0]) * 0.01
+    p_c = int(code[1]) * 0.10
+    t_c = int(code[2:]) * 0.01
+    return t_c, m_c, p_c
+
+
 # ---------------------------------------------------------------------------
 # --- Streamlit UI -----------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -182,12 +231,45 @@ st.markdown(
 
 st.title("NACA Airfoil Generator ✈️")
 
+# Selectbox para escolher o perfil
+preset = st.sidebar.selectbox("NACA Profile", NACA_LIST, key="preset")
+
+if preset != "Custom":
+    t_def, m_def, p_def = decode_naca(preset)
+    # actualiza sliders apenas se mudou
+    if (
+        st.session_state.get("t_c") != t_def or
+        st.session_state.get("m_c") != m_def or
+        st.session_state.get("p_c") != p_def
+    ):
+        st.session_state["t_c"] = t_def
+        st.session_state["m_c"] = m_def
+        st.session_state["p_c"] = p_def
+        if hasattr(st, "rerun"):  # Streamlit ≥ 1.25
+            st.rerun()
+        else:  # versões mais antigas
+            st.experimental_rerun()
+
 # Sidebar controls
 st.sidebar.header("Geometry & Flight Params")
 
-t_c = st.sidebar.slider("Thickness-to-Chord Ratio (t/c)", 0.01, 0.5, 0.12, 0.01)
-m_c = st.sidebar.slider("Maximum Camber-to-Chord (m/c)", 0.0, 0.09, 0.04, 0.01)
-p_c = st.sidebar.slider("Position of Max Camber (p/c)", 0.0, 0.9, 0.4, 0.1)
+# t_c = st.sidebar.slider("Thickness-to-Chord Ratio (t/c)", 0.01, 0.5, 0.12, 0.01)
+# m_c = st.sidebar.slider("Maximum Camber-to-Chord (m/c)", 0.0, 0.09, 0.04, 0.01)
+# p_c = st.sidebar.slider("Position of Max Camber (p/c)", 0.0, 0.9, 0.4, 0.1)
+
+t_c = st.sidebar.slider(
+    "Thickness-to-Chord Ratio (t/c)",
+    0.01, 0.50, st.session_state.get("t_c", 0.12), 0.01
+)
+m_c = st.sidebar.slider(
+    "Maximum Camber-to-Chord (m/c)",
+    0.00, 0.09, st.session_state.get("m_c", 0.04), 0.01
+)
+p_c = st.sidebar.slider(
+    "Position of Max Camber (p/c)",
+    0.0, 0.9, st.session_state.get("p_c", 0.4), 0.1
+)
+
 chord = st.sidebar.slider("Chord Length [m]", 0.1, 10.0, 1.0, 0.1)
 points = st.sidebar.slider("Number of Points", 100, 800, 400, 50)
 reynolds = st.sidebar.slider("Reynolds Number", 100_000, 3_000_000, 500_000, 50_000)
