@@ -26,6 +26,11 @@ import textwrap
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
+try:
+    from stl import mesh        # pip install numpy-stl
+except ImportError:
+    mesh = None
+
 
 # ---------------------------------------------------------------------------
 # --- Constants & Helpers ----------------------------------------------------
@@ -134,6 +139,67 @@ def run_xfoil(inp_path: Path) -> tuple[str, str]:
             text=True,
         )
     return result.stdout, result.stderr
+
+
+def export_stl(x, y_up, y_lo, span, fname):
+    """
+    Extrude current section by *span* and write an STL file.
+
+    Parameters:
+    - x: array of x coordinates of the airfoil
+    - y_up: array of y coordinates of the upper surface
+    - y_lo: array of y coordinates of the lower surface
+    - span: span of the airfoil to extrude (along the Z axis)
+    - fname: path to the output STL file
+    """
+    # Vertices of the surfaces (z=0 and z=span)
+    z0 = np.zeros_like(x)  # At z=0 (base of the extruded airfoil)
+    z1 = np.full_like(x, span)  # At z=span (top of the extruded airfoil)
+
+    # Create vertices: upper surface (z=0), lower surface (z=0), upper surface (z=span), lower surface (z=span)
+    v = np.vstack([
+        np.column_stack((x, y_up, z0)),  # 0 … n-1   (upper surface at z=0)
+        np.column_stack((x, y_lo, z0)),  # n … 2n-1  (lower surface at z=0)
+        np.column_stack((x, y_up, z1)),  # 2n … 3n-1 (upper surface at z=span)
+        np.column_stack((x, y_lo, z1)),  # 3n … 4n-1 (lower surface at z=span)
+    ])
+
+    # Number of points in the airfoil
+    n = len(x)
+
+    # Create faces (triangles for STL)
+    faces = []
+    for i in range(n - 1):
+        a, b = i, i + 1  # upper surface z=0
+        c, d = i + n, i + 1 + n  # lower surface z=0
+        e, f = i + 2 * n, i + 1 + 2 * n  # upper surface z=span
+        g, h = i + 3 * n, i + 1 + 3 * n  # lower surface z=span
+
+        # Faces of the STL: Upper and Lower surfaces (faces), and side walls (LE/TE)
+        faces += [[a, b, f], [a, f, e], [d, c, g], [d, g, h]]  # Faces for the upper and lower surfaces
+        faces += [[a, e, g], [a, g, c], [b, d, h], [b, h, f]]  # Walls (leading edge and trailing edge)
+
+    faces = np.array(faces)
+
+    # Check if numpy-stl is installed
+    if mesh is not None:
+        # Create a binary STL mesh (more compact)
+        m = mesh.Mesh(np.zeros(len(faces), dtype=mesh.Mesh.dtype))
+        for i, tri in enumerate(faces):
+            m.vectors[i] = v[tri]
+        m.save(str(fname))
+    else:
+        # Fallback: Create an ASCII STL (useful for preview)
+        with fname.open("w") as f:
+            f.write("solid airfoil\n")
+            for tri in faces:
+                f.write(" facet normal 0 0 0\n  outer loop\n")
+                for idx in tri:
+                    f.write(f"   vertex {v[idx][0]:.6e} {v[idx][1]:.6e} {v[idx][2]:.6e}\n")
+                f.write("  endloop\n endfacet\n")
+            f.write("endsolid airfoil\n")
+
+    return fname
 
 
 def parse_polar(polar_path: Path) -> dict[str, float]:
@@ -275,6 +341,7 @@ points = st.sidebar.slider("Number of Points", 100, 800, 400, 50)
 reynolds = st.sidebar.slider("Reynolds Number", 100_000, 3_000_000, 500_000, 50_000)
 mach = st.sidebar.slider("Mach Number", 0.05, 0.85, 0.5, 0.01)
 alpha = st.sidebar.slider("Angle of Attack [°]", -10.0, 15.0, 1.0, 0.1)
+span = st.sidebar.number_input("Span for STL [m]", 0.05, 10.0, 0.30, 0.05)
 
 # ---------------------------------------------------------------------------
 # --- Airfoil generation & plot ---------------------------------------------
@@ -306,6 +373,13 @@ with airfoil_dat.open("rb") as dat_file:
         file_name="airfoil.dat",
         mime="text/plain",
     )
+if st.button("Export STL"):
+    stl_path = coord_filename("airfoil.stl")
+    export_stl(x, y_up, y_lo, span, stl_path)
+    with stl_path.open("rb") as f:
+        st.download_button("⬇️ Download airfoil.stl", f, "airfoil.stl", "application/sla")
+    st.success("STL gerado com sucesso!")
+
 
 # ---------------------------------------------------------------------------
 # --- XFOIL evaluation -------------------------------------------------------
