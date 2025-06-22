@@ -2,7 +2,7 @@
 
 Interactive Streamlit app that lets you **design a NACA 4‑digit airfoil and instantly predict its aerodynamic performance** using the classic XFOIL solver.
 
-![NACA](naca.png)
+![NACA](images/naca.png)
 ---
 
 ## Features

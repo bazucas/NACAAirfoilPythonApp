@@ -97,6 +97,39 @@ def write_dat_file(x: np.ndarray, y_upper: np.ndarray, y_lower: np.ndarray) -> P
     return dat_path
 
 
+def write_mirrored_svg_file(x: np.ndarray, y_up: np.ndarray, y_lo: np.ndarray, filename: Path) -> Path:
+    """
+    Generate a 2D SVG of the airfoil contour, rotated 180° around its center and then mirrored
+    horizontally about its vertical centerline.
+    """
+    coords = np.vstack([
+        np.column_stack((x, y_up)),
+        np.column_stack((x[::-1], y_lo[::-1]))
+    ])
+    xmin, ymin = coords.min(axis=0)
+    xmax, ymax = coords.max(axis=0)
+    cx, cy = 0.5*(xmin+xmax), 0.5*(ymin+ymax)
+    view_w, view_h = xmax - xmin, ymax - ymin
+
+    header = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{xmin} {ymin} {view_w} {view_h}">\n'
+    pts = " ".join(f"{xi:.6f},{yi:.6f}" for xi, yi in coords)
+
+    # 1) Rotação 180° em volta de (cx,cy)
+    # 2) Espelho horizontal: translate(2*cx,0) scale(-1,1)
+    transform = (
+        f'translate({2*cx:.6f},0) '
+        f'scale(-1,1) '
+        f'rotate(180 {cx:.6f} {cy:.6f})'
+    )
+    body = f'  <g transform="{transform}">\n'
+    body += f'    <polyline points="{pts}" fill="none" stroke="black" stroke-width="0.001"/>\n'
+    body += "  </g>\n"
+    footer = "</svg>\n"
+
+    filename.write_text(header + body + footer)
+    return filename
+
+
 def build_xfoil_input(
     alpha: float, re: int, mach: float, airfoil_dat: Path
 ) -> Path:
@@ -143,54 +176,74 @@ def run_xfoil(inp_path: Path) -> tuple[str, str]:
 
 def export_stl(x, y_up, y_lo, span, fname, stl_chord):
     """
-    Extrude current section by *span* and write an STL file.
+    Extrude the airfoil section by `span` and write an STL file.
 
     Parameters:
     - x: array of x coordinates of the airfoil
     - y_up: array of y coordinates of the upper surface
     - y_lo: array of y coordinates of the lower surface
-    - span: span of the airfoil to extrude (along the Z axis)
-    - fname: path to the output STL file
-    - stl_chord: chord length to be used for the STL (can be different from the plot chord)
+    - span: extrusion length along the Z axis
+    - fname: output path for the STL file
+    - stl_chord: chord length to use in the STL (can differ from plot chord)
     """
-    # Vertices of the surfaces (z=0 and z=span)
-    z0 = np.zeros_like(x)  # At z=0 (base of the extruded airfoil)
-    z1 = np.full_like(x, span)  # At z=span (top of the extruded airfoil)
+    # Create z-coordinates for base (z=0) and top (z=span)
+    z0 = np.zeros_like(x)
+    z1 = np.full_like(x, span)
 
-    # Create vertices: upper surface (z=0), lower surface (z=0), upper surface (z=span), lower surface (z=span)
+    # Stack vertices in this order:
+    # 0…n-1   = upper surface at z=0
+    # n…2n-1  = lower surface at z=0
+    # 2n…3n-1 = upper surface at z=span
+    # 3n…4n-1 = lower surface at z=span
     v = np.vstack([
-        np.column_stack((x, y_up, z0)),  # 0 … n-1   (upper surface at z=0)
-        np.column_stack((x, y_lo, z0)),  # n … 2n-1  (lower surface at z=0)
-        np.column_stack((x, y_up, z1)),  # 2n … 3n-1 (upper surface at z=span)
-        np.column_stack((x, y_lo, z1)),  # 3n … 4n-1 (lower surface at z=span)
+        np.column_stack((x, y_up, z0)),
+        np.column_stack((x, y_lo, z0)),
+        np.column_stack((x, y_up, z1)),
+        np.column_stack((x, y_lo, z1)),
     ])
 
-    # Number of points in the airfoil
     n = len(x)
-
-    # Create faces (triangles for STL)
     faces = []
+
+    # Build triangular faces for upper, lower surfaces and side walls
     for i in range(n - 1):
-        a, b = i, i + 1  # upper surface z=0
-        c, d = i + n, i + 1 + n  # lower surface z=0
-        e, f = i + 2 * n, i + 1 + 2 * n  # upper surface z=span
-        g, h = i + 3 * n, i + 1 + 3 * n  # lower surface z=span
+        a, b = i, i + 1
+        c, d = i + n, i + 1 + n
+        e, f = i + 2 * n, i + 1 + 2 * n
+        g, h = i + 3 * n, i + 1 + 3 * n
 
-        # Faces of the STL: Upper and Lower surfaces (faces), and side walls (LE/TE)
-        faces += [[a, b, f], [a, f, e], [d, c, g], [d, g, h]]  # Faces for the upper and lower surfaces
-        faces += [[a, e, g], [a, g, c], [b, d, h], [b, h, f]]  # Walls (leading edge and trailing edge)
+        # Upper and lower surface triangles
+        faces.append([a, b, f])
+        faces.append([a, f, e])
+        faces.append([d, c, g])
+        faces.append([d, g, h])
 
+        # Side wall triangles (leading and trailing edges along span)
+        faces.append([a, e, g])
+        faces.append([a, g, c])
+        faces.append([b, d, h])
+        faces.append([b, h, f])
+
+    # Add caps at the leading edge (x=0) to close the volume
+    faces.append([0, n, 3 * n])
+    faces.append([0, 3 * n, 2 * n])
+
+    # Add caps at the trailing edge (x=chord) to close the volume
+    i_end = n - 1
+    faces.append([i_end, i_end + n, i_end + 3 * n])
+    faces.append([i_end, i_end + 3 * n, i_end + 2 * n])
+
+    # Convert face list to numpy array
     faces = np.array(faces)
 
-    # Check if numpy-stl is installed
+    # Save binary STL if numpy-stl is installed
     if mesh is not None:
-        # Create a binary STL mesh (more compact)
         m = mesh.Mesh(np.zeros(len(faces), dtype=mesh.Mesh.dtype))
         for i, tri in enumerate(faces):
             m.vectors[i] = v[tri]
         m.save(str(fname))
     else:
-        # Fallback: Create an ASCII STL (useful for preview)
+        # Fallback to ASCII STL
         with fname.open("w") as f:
             f.write("solid airfoil\n")
             for tri in faces:
@@ -201,7 +254,6 @@ def export_stl(x, y_up, y_lo, span, fname, stl_chord):
             f.write("endsolid airfoil\n")
 
     return fname
-
 
 
 def parse_polar(polar_path: Path) -> dict[str, float]:
@@ -270,6 +322,76 @@ def decode_naca(code: str) -> Tuple[float, float, float]:
     return t_c, m_c, p_c
 
 
+def write_svg_file(x: np.ndarray, y_up: np.ndarray, y_lo: np.ndarray, filename: Path) -> Path:
+    """
+    Generate a 2D SVG polyline of the airfoil contour (upper + lower) and save to filename.
+    """
+    coords = np.vstack([
+        np.column_stack((x, y_up)),
+        np.column_stack((x[::-1], y_lo[::-1]))
+    ])
+    xmin, ymin = coords.min(axis=0)
+    xmax, ymax = coords.max(axis=0)
+    view_w, view_h = xmax - xmin, ymax - ymin
+
+    header = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{xmin} {ymin} {view_w} {view_h}">\n'
+    points_str = " ".join(f"{xi:.6f},{yi:.6f}" for xi, yi in coords)
+    body   = f'  <polyline points="{points_str}" fill="none" stroke="black" stroke-width="0.001"/>\n'
+    footer = "</svg>\n"
+
+    filename.write_text(header + body + footer)
+    return filename
+
+
+def write_dxf_file_ascii(x: np.ndarray, y_up: np.ndarray, y_lo: np.ndarray, filename: Path) -> Path:
+    """
+    Generate a minimal DXF R12 file with a closed LWPolyline for the airfoil contour.
+    """
+    coords = np.vstack([
+        np.column_stack((x, y_up)),
+        np.column_stack((x[::-1], y_lo[::-1]))
+    ])
+    with filename.open("w") as f:
+        # Header
+        f.write("0\nSECTION\n2\nHEADER\n0\nENDSEC\n")
+        # Tables
+        f.write("0\nSECTION\n2\nTABLES\n0\nENDSEC\n")
+        # Entities
+        f.write("0\nSECTION\n2\nENTITIES\n")
+        # LWPOLYLINE
+        f.write("0\nLWPOLYLINE\n70\n1\n90\n{}\n".format(len(coords)))
+        for xi, yi in coords:
+            f.write(f"10\n{xi:.6f}\n20\n{yi:.6f}\n")
+        f.write("0\nENDSEC\n0\nEOF\n")
+    return filename
+
+
+def write_rotated_svg_file(x: np.ndarray, y_up: np.ndarray, y_lo: np.ndarray, filename: Path) -> Path:
+    """
+    Generate a 2D SVG of the airfoil contour, rotated 180° around its center.
+    """
+    # Concatena pontos
+    coords = np.vstack([
+        np.column_stack((x, y_up)),
+        np.column_stack((x[::-1], y_lo[::-1]))
+    ])
+    # Calcula centro para rotação
+    xmin, ymin = coords.min(axis=0)
+    xmax, ymax = coords.max(axis=0)
+    cx, cy = 0.5*(xmin+xmax), 0.5*(ymin+ymax)
+
+    # Cria conteúdo SVG com transform
+    view_w, view_h = xmax - xmin, ymax - ymin
+    header = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{xmin} {ymin} {view_w} {view_h}">\n'
+    # Polyline normal, mas dentro de um <g> que roda
+    pts = " ".join(f"{xi:.6f},{yi:.6f}" for xi, yi in coords)
+    body  = f'  <g transform="rotate(180 {cx:.6f} {cy:.6f})">\n'
+    body += f'    <polyline points="{pts}" fill="none" stroke="black" stroke-width="0.001"/>\n'
+    body += "  </g>\n"
+    footer = "</svg>"
+    filename.write_text(header + body + footer)
+    return filename
+
 # ---------------------------------------------------------------------------
 # --- Streamlit UI -----------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -325,26 +447,36 @@ st.sidebar.header("Geometry & Flight Params")
 # m_c = st.sidebar.slider("Maximum Camber-to-Chord (m/c)", 0.0, 0.09, 0.04, 0.01)
 # p_c = st.sidebar.slider("Position of Max Camber (p/c)", 0.0, 0.9, 0.4, 0.1)
 
-t_c = st.sidebar.slider(
-    "Thickness-to-Chord Ratio (t/c)",
-    0.01, 0.50, st.session_state.get("t_c", 0.12), 0.01
-)
-m_c = st.sidebar.slider(
-    "Maximum Camber-to-Chord (m/c)",
-    0.00, 0.09, st.session_state.get("m_c", 0.04), 0.01
-)
-p_c = st.sidebar.slider(
-    "Position of Max Camber (p/c)",
-    0.0, 0.9, st.session_state.get("p_c", 0.4), 0.1
-)
-
+t_c = st.sidebar.slider("Thickness-to-Chord Ratio (t/c)",0.01, 0.50, st.session_state.get("t_c", 0.12), 0.01)
+m_c = st.sidebar.slider("Maximum Camber-to-Chord (m/c)",0.00, 0.09, st.session_state.get("m_c", 0.04), 0.01)
+p_c = st.sidebar.slider("Position of Max Camber (p/c)",0.0, 0.9, st.session_state.get("p_c", 0.4), 0.1)
 chord = st.sidebar.slider("Chord Length [m]", 0.1, 10.0, 1.0, 0.1)
 points = st.sidebar.slider("Number of Points", 100, 800, 400, 50)
 reynolds = st.sidebar.slider("Reynolds Number", 100_000, 3_000_000, 500_000, 50_000)
 mach = st.sidebar.slider("Mach Number", 0.05, 0.85, 0.5, 0.01)
 alpha = st.sidebar.slider("Angle of Attack [°]", -10.0, 15.0, 1.0, 0.1)
-span = st.sidebar.number_input("Span for STL [m]", 0.05, 10.0, 0.30, 0.05)
-stl_chord = st.sidebar.number_input("STL chord [m]", 0.1, 10.0, chord, 0.1)
+# define um limite máximo (200 mm = 0.2 m)
+MAX_STL = 0.2
+
+# Span varia de 5 mm a 200 mm, valor inicial a 30 mm
+span = st.sidebar.number_input(
+    "Span for STL [m]",
+    min_value=0.005,
+    max_value=MAX_STL,
+    value=0.03,    # 30 mm por defeito
+    step=0.005     # 5 mm de incremento
+)
+
+# calcula um default para stl_chord que nunca exceda o máximo
+default_stl_chord = chord if chord <= MAX_STL else MAX_STL
+
+stl_chord = st.sidebar.number_input(
+    "STL chord [m]",
+    min_value=0.01,
+    max_value=MAX_STL,
+    value=default_stl_chord,
+    step=0.01      # 10 mm de incremento
+)
 
 # ---------------------------------------------------------------------------
 # --- Airfoil generation & plot ---------------------------------------------
@@ -367,22 +499,42 @@ st.pyplot(fig)
 # ---------------------------------------------------------------------------
 # --- Data export ------------------------------------------------------------
 # ---------------------------------------------------------------------------
-
+# 1) Gera o .dat, o DXF ASCII, o SVG normal, o SVG 180° e o SVG espelhado
 airfoil_dat = write_dat_file(x, y_up, y_lo)
-with airfoil_dat.open("rb") as dat_file:
-    st.download_button(
-        label="⬇️ Download airfoil.dat",
-        data=dat_file,
-        file_name="airfoil.dat",
-        mime="text/plain",
-    )
-if st.button("Export STL"):
-    stl_path = coord_filename("airfoil.stl")
-    export_stl(x, y_up, y_lo, span, stl_path, stl_chord)
-    with stl_path.open("rb") as f:
-        st.download_button("⬇️ Download airfoil.stl", f, "airfoil.stl", "application/sla")
-    st.success("STL gerado com sucesso!")
+dxf_path = coord_filename("airfoil_contours.dxf")
+write_dxf_file_ascii(x, y_up, y_lo, dxf_path)
 
+mirrored_svg_path = coord_filename("airfoil_contours_mirrored.svg")
+write_mirrored_svg_file(x, y_up, y_lo, mirrored_svg_path)
+
+# 2) Layout com quatro botões, todos na mesma linha
+col1, col2, col3, col4 = st.columns(4)
+
+# **Exportação STL agora sem necessidade de clicar**
+stl_path = coord_filename("airfoil.stl")
+export_stl(x, y_up, y_lo, span, stl_path, stl_chord)
+
+with col1:
+    with stl_path.open("rb") as f:
+        st.download_button("⬇️ STL", f, "airfoil.stl", "application/sla", key="dl_stl")
+
+with col2:
+    with airfoil_dat.open("rb") as f:
+        st.download_button("⬇️ DAT", f, "airfoil.dat", "text/plain", key="dl_dat")
+
+with col3:
+    with dxf_path.open("rb") as f:
+        st.download_button("⬇️ DXF", f, "airfoil_contours.dxf", "application/dxf", key="dl_dxf")
+
+with col4:
+    with mirrored_svg_path.open("rb") as f:
+        st.download_button(
+            "⬇️ SVG",
+            f,
+            "airfoil_contours_mirrored.svg",
+            "image/svg+xml",
+            key="dl_svg"
+        )
 
 # ---------------------------------------------------------------------------
 # --- XFOIL evaluation -------------------------------------------------------
